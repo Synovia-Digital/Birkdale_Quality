@@ -22,6 +22,14 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="FLow_Birkdale_QAS.py" />
+    <Compile Include="Jobs\FLow_Birkdale_QAS.py" />
+    <Compile Include="Render\FLow_Birkdale_QAS.py" />
+    <Compile Include="Utilities\Initial_Test_Probe.py" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Jobs\" />
+    <Folder Include="Render\" />
+    <Folder Include="Utilities\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

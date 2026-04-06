@@ -1,3 +1,4 @@
+
 """
 ================================================================================
   Synovia Flow -- TSS Birkdale Test Environment Probe
@@ -6,9 +7,9 @@
 
   Product:      Synovia Flow (Customs Declaration Management)
   Module:       TSS Birkdale Test Environment Probe
-  Version:      1.0.1
+  Version:      1.0.0
   Database:     Fusion_TSS
-  Schema:       BKD (Birkdale)
+  Schema:       BRK (Birkdale)
   API:          TSS Declaration API v2.9.4 (TEST)
 
   Description:
@@ -41,23 +42,17 @@
   Prerequisites:
   --------------
   - D:\\confguration\\fusion_TSS.ini
-  - CFG.Credentials for BKD/TST (active=1) in Fusion_TSS
-  - CFG.Environments with env_code TST
+  - CFG.Credentials + CFG.Environments for BRK/TST in Fusion_TSS
   - pip install rich requests pyodbc
 
   Usage:
       python TSS_BRK_Probe.py
 
-  Changelog:
-  ----------
-  v1.0.1  Fixed CLIENT_CODE from 'BRK' to 'BKD' to match CFG.Credentials.
-  v1.0.0  Initial probe script.
-
   Copyright (c) 2026 Synovia Digital Ltd. All rights reserved.
 ================================================================================
 """
 
-__version__ = '1.0.1'
+__version__ = '1.0.0'
 __product__ = 'Synovia Flow'
 __module__  = 'TSS Birkdale Test Environment Probe'
 
@@ -83,13 +78,13 @@ con = Console(highlight=False, width=140)
 # ==============================================================
 #  CLIENT CONFIG
 # ==============================================================
-CLIENT_CODE = 'BKD'
+CLIENT_CODE = 'BRK'
 CLIENT_NAME = 'Birkdale'
 ENV_CODE    = 'TST'
 DB_NAME     = 'Fusion_TSS'
 INI_PATH    = r'D:\confguration\fusion_TSS.ini'
 
-RATE_LIMIT  = 0.20
+RATE_LIMIT  = 0.20          # polite pause between API calls (seconds)
 API_TIMEOUT = 30
 
 TIMESTAMP   = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -99,19 +94,22 @@ HTML_FILE   = os.path.join(OUTPUT_DIR, f'brk_probe_{TIMESTAMP}.html')
 
 # ──────────────────────────────────────────────────────────────
 #  STATUSES TO PROBE PER RESOURCE
+#  (confirmed valid against TSS API v2.9.4)
 # ──────────────────────────────────────────────────────────────
 
+# ENS Header statuses — from [TSS].[CV_ens_status]
 ENS_STATUSES = [
     'Draft',
     'Submitted',
     'Processing',
     'Trader Input Required',
     'Authorised for Movement',
-    'Authorised for movement',
+    'Authorised for movement',     # API is case-sensitive
     'Arrived',
     'Cancelled',
 ]
 
+# SFD statuses — all 9 return HTTP 200 (confirmed by CWF probe)
 SFD_STATUSES = [
     'Draft',
     'Submitted',
@@ -124,6 +122,8 @@ SFD_STATUSES = [
     'Cancelled',
 ]
 
+# Supplementary Declaration statuses — from [TSS].[CV_sd_status]
+# Removed: Accepted, Rejected, Cleared, Amendment Required (HTTP 400)
 SUP_DEC_STATUSES = [
     'closed',
     'trader input required',
@@ -142,6 +142,7 @@ SUP_DEC_STATUSES = [
     'cancelled',
 ]
 
+# FFD statuses
 FFD_STATUSES = [
     'Draft',
     'Submitted',
@@ -151,6 +152,7 @@ FFD_STATUSES = [
     'Cancelled',
 ]
 
+# IMMI statuses
 IMMI_STATUSES = [
     'Draft',
     'Submitted',
@@ -159,6 +161,7 @@ IMMI_STATUSES = [
     'Cancelled',
 ]
 
+# GVMS GMR statuses
 GVMS_STATUSES = [
     'Draft',
     'Submitted',
@@ -237,10 +240,7 @@ def load_credentials():
         WHERE cr.client_code=? AND cr.env_code=? AND cr.active=1
     """, [CLIENT_CODE, ENV_CODE])
     if not rows:
-        con.print(f'[red]No active {ENV_CODE} credentials for '
-                  f'{CLIENT_CODE} ({CLIENT_NAME})[/red]')
-        con.print(f'[dim]Check: SELECT * FROM CFG.Credentials '
-                  f"WHERE client_code='{CLIENT_CODE}'[/dim]")
+        con.print(f'[red]No active {ENV_CODE} credentials for {CLIENT_CODE}[/red]')
         sys.exit(1)
     return rows[0]
 
@@ -287,13 +287,16 @@ class TssApi:
             self.errors.append(f'{endpoint}?{param_str} → {str(e)[:80]}')
             return 0, None, str(e)[:500], ms
 
+    # ── Filter (discover refs) ────────────────────────────────
     def filter_resource(self, resource, status):
         return self._get(resource, {'filter': f'status={status}'})
 
+    # ── Read (get detail) ─────────────────────────────────────
     def read_resource(self, resource, reference, fields):
         return self._get(resource, {
             'reference': reference, 'fields': fields})
 
+    # ── Permission Grant ──────────────────────────────────────
     def check_permission(self, importer_eori):
         return self._get('permission_grant', {
             'importer_eori': importer_eori})
@@ -303,9 +306,9 @@ class TssApi:
 #  HELPERS
 # ==============================================================
 def sc(status):
+    """Rich colour tag based on status keyword."""
     s = (status or '').lower()
-    if any(k in s for k in ('authorised', 'arrived', 'accepted',
-                             'cleared', 'closed')):
+    if any(k in s for k in ('authorised', 'arrived', 'accepted', 'cleared', 'closed')):
         return 'green'
     if any(k in s for k in ('submitted', 'processing', 'draft')):
         return 'yellow'
@@ -326,7 +329,12 @@ def trunc(v, n=30):
 def extract_refs_from_filter(result):
     """
     Extract reference numbers from a TSS filter response.
-    FIXED: reads 'number' key first (most common from filter).
+    Handles all known response shapes:
+      - List of dicts with 'number' key (most common)
+      - List of dicts with 'reference'/'sfd_number'/'sup_dec_number' etc.
+      - List of strings
+      - Single dict
+      - None / empty
     """
     if not result:
         return []
@@ -369,6 +377,10 @@ def extract_refs_from_filter(result):
 #  PROBE ENGINE
 # ==============================================================
 def probe_resource(api, resource, statuses, label):
+    """
+    Probe a resource across all valid statuses.
+    Returns: { status: [refs], ... }, set(all_refs)
+    """
     con.print()
     con.rule(f'[bold cyan]{label}[/bold cyan]')
     con.print(f'  [dim]GET /{resource}?filter=status=<STATUS>[/dim]')
@@ -408,20 +420,24 @@ def probe_resource(api, resource, statuses, label):
 
 
 def read_sample(api, resource, refs, fields, label, max_sample=5):
+    """
+    Read a small sample of discovered refs to show data shape.
+    Returns list of (ref, status, summary_dict) tuples.
+    """
     if not refs:
         return []
 
     sample = sorted(refs)[:max_sample]
     results = []
 
-    con.print(f'\n  [dim]Reading sample ({len(sample)} of '
-              f'{len(refs)})...[/dim]')
+    con.print(f'\n  [dim]Reading sample ({len(sample)} of {len(refs)})...[/dim]')
 
     for i, ref in enumerate(sample, 1):
         http, result, raw, ms = api.read_resource(resource, ref, fields)
         if http == 200 and result:
             status = result.get('status', '?')
             results.append((ref, status, result))
+            # Build a one-line summary from a few key fields
             parts = [f'[{sc(status)}]{status}[/{sc(status)}]']
             for k in ['importer_eori', 'carrier_eori', 'arrival_port',
                        'arrival_date_time', 'goods_description',
@@ -444,10 +460,12 @@ def read_sample(api, resource, refs, fields, label, max_sample=5):
 
 
 # ==============================================================
-#  HTML REPORT
+#  HTML REPORT GENERATOR
 # ==============================================================
 def write_html(discovery, summary):
+    """Generate an interactive HTML probe report."""
     import html as html_mod
+
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     html_parts = [f"""<!DOCTYPE html>
@@ -457,36 +475,32 @@ def write_html(discovery, summary):
 <style>
   :root {{ --bg:#0b0e14; --bg2:#161b22; --panel:#1a2235; --border:#30363d;
            --accent:#3d7eff; --green:#22c55e; --yellow:#f59e0b; --red:#ef4444;
-           --text:#c9d1d9; --dim:#6b7fa8; --bright:#f0f6fc;
-           --mono:'Consolas','Courier New',monospace; }}
+           --text:#c9d1d9; --dim:#6b7fa8; --mono:'Consolas',monospace; }}
   * {{ box-sizing:border-box; margin:0; padding:0; }}
-  body {{ font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
-          background:var(--bg); color:var(--text); }}
+  body {{ font-family:-apple-system,sans-serif; background:var(--bg); color:var(--text); }}
   .container {{ max-width:1100px; margin:0 auto; padding:24px; }}
-  h1 {{ color:var(--bright); font-size:22px; margin-bottom:4px; }}
-  h2 {{ color:var(--bright); font-size:16px; margin:18px 0 10px; }}
+  h1 {{ color:#f0f6fc; font-size:22px; margin-bottom:4px; }}
+  h2 {{ color:#f0f6fc; font-size:16px; margin:18px 0 10px; }}
   .subtitle {{ font-size:13px; color:var(--dim); margin-bottom:20px; }}
-  .card {{ background:var(--panel); border:1px solid var(--border);
-           border-radius:10px; padding:16px 20px; margin-bottom:14px; }}
+  .card {{ background:var(--panel); border:1px solid var(--border); border-radius:10px;
+           padding:16px 20px; margin-bottom:14px; }}
   table {{ width:100%; border-collapse:collapse; font-size:13px; }}
   th {{ text-align:left; padding:6px 10px; color:var(--dim); font-size:11px;
-        text-transform:uppercase; letter-spacing:.5px;
-        border-bottom:1px solid var(--border); }}
+        text-transform:uppercase; letter-spacing:.5px; border-bottom:1px solid var(--border); }}
   td {{ padding:6px 10px; border-bottom:1px solid rgba(48,54,61,.5); }}
   .mono {{ font-family:var(--mono); font-size:12px; }}
   .green {{ color:var(--green); }} .yellow {{ color:var(--yellow); }}
   .red {{ color:var(--red); }} .dim {{ color:var(--dim); }}
-  .pill {{ display:inline-block; font-size:11px; font-weight:700;
-           padding:2px 8px; border-radius:10px; }}
+  .pill {{ display:inline-block; font-size:11px; font-weight:700; padding:2px 8px;
+           border-radius:10px; }}
   .pill-green {{ background:rgba(34,197,94,.15); color:var(--green); }}
+  .pill-yellow {{ background:rgba(245,158,11,.15); color:var(--yellow); }}
+  .pill-red {{ background:rgba(239,68,68,.15); color:var(--red); }}
   .pill-dim {{ background:rgba(107,127,168,.15); color:var(--dim); }}
   .big-num {{ font-size:28px; font-weight:800; color:var(--accent); }}
   .stat-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }}
   .stat-box {{ text-align:center; }}
   .stat-label {{ font-size:11px; color:var(--dim); text-transform:uppercase; }}
-  .verdict {{ padding:16px 20px; border-radius:10px; margin:18px 0; font-size:15px; font-weight:600; }}
-  .verdict-found {{ background:rgba(34,197,94,.1); border:1px solid rgba(34,197,94,.3); color:var(--green); }}
-  .verdict-clean {{ background:rgba(245,158,11,.1); border:1px solid rgba(245,158,11,.3); color:var(--yellow); }}
 </style></head><body><div class="container">
 <h1>TSS Birkdale – Test Environment Probe</h1>
 <p class="subtitle">{CLIENT_NAME} ({CLIENT_CODE}) · {ENV_CODE} · {summary['api_base']} · {summary['generated']}</p>
@@ -496,30 +510,20 @@ def write_html(discovery, summary):
     html_parts.append('<div class="card"><div class="stat-grid">')
     for label, count in summary['totals'].items():
         html_parts.append(
-            f'<div class="stat-box"><div class="big-num">{count}</div>'
+            f'<div class="stat-box">'
+            f'<div class="big-num">{count}</div>'
             f'<div class="stat-label">{html_mod.escape(label)}</div></div>')
     html_parts.append(
-        f'<div class="stat-box"><div class="big-num">{summary["api_calls"]}</div>'
+        f'<div class="stat-box">'
+        f'<div class="big-num">{summary["api_calls"]}</div>'
         f'<div class="stat-label">API Calls</div></div>')
     html_parts.append(
-        f'<div class="stat-box"><div class="big-num">{summary["elapsed"]:.0f}s</div>'
+        f'<div class="stat-box">'
+        f'<div class="big-num">{summary["elapsed"]:.0f}s</div>'
         f'<div class="stat-label">Runtime</div></div>')
     html_parts.append('</div></div>')
 
-    # Verdict
-    total_all = sum(summary['totals'].values())
-    if total_all > 0:
-        rc = sum(1 for v in summary['totals'].values() if v > 0)
-        html_parts.append(
-            f'<div class="verdict verdict-found">Data found — {total_all} '
-            f'declaration references across {rc} resource types</div>')
-    else:
-        html_parts.append(
-            f'<div class="verdict verdict-clean">Clean slate — no existing '
-            f'declarations found for {CLIENT_CODE}/{ENV_CODE}. '
-            f'Ready for fresh test data.</div>')
-
-    # Per-resource
+    # Per-resource breakdown
     for resource_key, data in discovery.items():
         by_status = data.get('by_status', {})
         total = data.get('total', 0)
@@ -529,87 +533,50 @@ def write_html(discovery, summary):
             f'<div class="card"><h2>{html_mod.escape(resource_key)} '
             f'<span class="dim">({total} refs)</span></h2>')
 
-        if by_status:
+        # Status table
+        html_parts.append(
+            '<table><thead><tr><th>Status</th><th>Count</th></tr></thead><tbody>')
+        for status, refs in by_status.items():
+            n = len(refs)
+            pill_class = 'pill-green' if n > 0 else 'pill-dim'
             html_parts.append(
-                '<table><thead><tr><th>Status</th><th>Count</th>'
-                '<th>References (first 5)</th></tr></thead><tbody>')
-            for status, refs in by_status.items():
-                n = len(refs)
-                pill = 'pill-green' if n > 0 else 'pill-dim'
-                preview = ', '.join(refs[:5])
-                if len(refs) > 5:
-                    preview += f' … (+{len(refs)-5} more)'
-                html_parts.append(
-                    f'<tr><td>{html_mod.escape(status)}</td>'
-                    f'<td><span class="pill {pill}">{n}</span></td>'
-                    f'<td class="mono dim" style="font-size:11px">'
-                    f'{html_mod.escape(preview)}</td></tr>')
-            html_parts.append('</tbody></table>')
+                f'<tr><td>{html_mod.escape(status)}</td>'
+                f'<td><span class="pill {pill_class}">{n}</span></td></tr>')
+        html_parts.append('</tbody></table>')
 
+        # Sample reads
         if sample:
             html_parts.append(
                 '<h2 style="margin-top:14px">Sample Reads</h2>'
                 '<table><thead><tr><th>Reference</th><th>Status</th>'
                 '<th>Key Fields</th></tr></thead><tbody>')
             for ref, status, rec in sample:
-                fs = ', '.join(
-                    f'{k}={trunc(v,25)}' for k, v in rec.items()
-                    if v and k != 'status' and not k.startswith('_'))[:250]
-                scl = ('green' if any(
-                    x in (status or '').lower()
-                    for x in ('closed','arrived','authorised')) else 'yellow')
+                # Pick interesting fields
+                fields_str = ', '.join(
+                    f'{k}={trunc(v,25)}'
+                    for k, v in rec.items()
+                    if v and k != 'status' and not k.startswith('_')
+                )[:200]
+                scl = 'green' if 'closed' in (status or '').lower() or 'arrived' in (status or '').lower() else 'yellow'
                 html_parts.append(
                     f'<tr><td class="mono">{html_mod.escape(str(ref))}</td>'
                     f'<td class="{scl}">{html_mod.escape(str(status))}</td>'
                     f'<td class="dim" style="font-size:11px">'
-                    f'{html_mod.escape(fs)}</td></tr>')
-            html_parts.append('</tbody></table>')
-
-        perms = data.get('permissions', [])
-        if perms:
-            html_parts.append(
-                '<h2 style="margin-top:14px">EORI Permissions</h2>'
-                '<table><thead><tr><th>EORI</th><th>Permissions</th>'
-                '</tr></thead><tbody>')
-            for p in perms:
-                ps = ', '.join(
-                    f"{x.get('permission_type','?')}="
-                    f"{'granted' if x.get('granted') else 'denied'}"
-                    for x in p.get('permissions', []))
-                html_parts.append(
-                    f'<tr><td class="mono">{html_mod.escape(p["eori"])}</td>'
-                    f'<td class="dim">{html_mod.escape(ps or "none")}</td></tr>')
+                    f'{html_mod.escape(fields_str)}</td></tr>')
             html_parts.append('</tbody></table>')
 
         html_parts.append('</div>')
 
-    if summary.get('eoris'):
-        html_parts.append(
-            '<div class="card"><h2>Discovered EORIs</h2>'
-            '<table><thead><tr><th>EORI</th></tr></thead><tbody>')
-        for eori in summary['eoris']:
-            html_parts.append(
-                f'<tr><td class="mono">{html_mod.escape(eori)}</td></tr>')
-        html_parts.append('</tbody></table></div>')
-
+    # Errors
     if summary.get('errors'):
         html_parts.append(
-            f'<div class="card"><h2>Errors / Warnings '
-            f'({len(summary["errors"])})</h2>'
-            f'<ul style="padding-left:18px">')
-        for err in summary['errors'][:50]:
+            '<div class="card"><h2>Errors / Warnings</h2><ul>')
+        for err in summary['errors'][:30]:
             html_parts.append(
-                f'<li class="dim mono" style="font-size:12px;'
-                f'margin-bottom:3px">{html_mod.escape(err)}</li>')
-        if len(summary['errors']) > 50:
-            html_parts.append(
-                f'<li class="dim">… and {len(summary["errors"])-50} more</li>')
+                f'<li class="dim mono" style="font-size:12px">'
+                f'{html_mod.escape(err)}</li>')
         html_parts.append('</ul></div>')
 
-    html_parts.append(
-        f'<p class="dim" style="margin-top:20px;font-size:11px">'
-        f'{__product__} v{__version__} — {__module__} — '
-        f'{CLIENT_NAME} — Synovia Digital Ltd</p>')
     html_parts.append('</div></body></html>')
 
     with open(HTML_FILE, 'w', encoding='utf-8') as f:
@@ -640,7 +607,7 @@ def main():
     if not os.path.exists(INI_PATH):
         con.print(f'  [red]INI missing: {INI_PATH}[/red]')
         return
-    con.print(f'  INI:    [green]OK[/green]  {INI_PATH}')
+    con.print(f'  INI:    [green]OK[/green]')
 
     try:
         srv = query("SELECT @@SERVERNAME AS s")[0]['s']
@@ -653,7 +620,6 @@ def main():
     api_base = creds['base_url']
     con.print(f'  API:    [green]OK[/green]  {creds["tss_username"]}')
     con.print(f'  Base:   [dim]{api_base}[/dim]')
-    con.print(f'  Client: [bold cyan]{CLIENT_NAME} ({CLIENT_CODE})[/bold cyan]')
     con.print(f'  Env:    [bold yellow]{ENV_CODE}[/bold yellow]')
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -676,38 +642,37 @@ def main():
     else:
         con.print(f'  [red]API test failed: HTTP {http}  {ms}ms[/red]')
         try:
-            body = json.loads(raw)
-            msg = body.get('result', {}).get('process_message', '')
+            msg = json.loads(raw).get('result', {}).get('process_message', '')
             if msg:
                 con.print(f'  [red]{msg}[/red]')
-            else:
-                con.print(f'  [red]{(raw or "")[:300]}[/red]')
         except:
-            con.print(f'  [red]{(raw or "")[:300]}[/red]')
-        con.print()
+            con.print(f'  [red]{(raw or "")[:200]}[/red]')
         con.print(f'  [dim]Check credentials in CFG.Credentials '
                   f'for {CLIENT_CODE}/{ENV_CODE}[/dim]')
-        con.print(f'  [dim]  SELECT * FROM CFG.Credentials '
-                  f"WHERE client_code='{CLIENT_CODE}' "
-                  f"AND env_code='{ENV_CODE}'[/dim]")
         return
 
-    # ── Collection ────────────────────────────────────────────
+    # ── Collection structure ──────────────────────────────────
     discovery = {}
 
-    # Phase 1: ENS Headers
+    # ==========================================================
+    #  PHASE 1: ENS Headers
+    # ==========================================================
     by_status, all_refs = probe_resource(
-        api, 'headers', ENS_STATUSES, 'Phase 1 — ENS Headers')
+        api, 'headers', ENS_STATUSES,
+        'Phase 1 — ENS Headers')
     samples = read_sample(
         api, 'headers', all_refs, ENS_READ_FIELDS, 'ENS Headers')
     discovery['ENS Headers'] = {
         'resource': 'headers',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': samples,
     }
 
-    # Phase 2: SFDs
+    # ==========================================================
+    #  PHASE 2: SFDs
+    # ==========================================================
     by_status, all_refs = probe_resource(
         api, 'simplified_frontier_declarations', SFD_STATUSES,
         'Phase 2 — Simplified Frontier Declarations')
@@ -717,11 +682,14 @@ def main():
     discovery['SFDs'] = {
         'resource': 'simplified_frontier_declarations',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': samples,
     }
 
-    # Phase 3: Supplementary Declarations
+    # ==========================================================
+    #  PHASE 3: Supplementary Declarations
+    # ==========================================================
     by_status, all_refs = probe_resource(
         api, 'supplementary_declarations', SUP_DEC_STATUSES,
         'Phase 3 — Supplementary Declarations')
@@ -731,11 +699,14 @@ def main():
     discovery['Supplementary Declarations'] = {
         'resource': 'supplementary_declarations',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': samples,
     }
 
-    # Phase 4: Full Frontier Declarations
+    # ==========================================================
+    #  PHASE 4: Full Frontier Declarations
+    # ==========================================================
     by_status, all_refs = probe_resource(
         api, 'full_frontier_declarations', FFD_STATUSES,
         'Phase 4 — Full Frontier Declarations')
@@ -745,11 +716,14 @@ def main():
     discovery['Full Frontier Declarations'] = {
         'resource': 'full_frontier_declarations',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': samples,
     }
 
-    # Phase 5: Internal Market Movements
+    # ==========================================================
+    #  PHASE 5: Internal Market Movements
+    # ==========================================================
     by_status, all_refs = probe_resource(
         api, 'internal_market_movements', IMMI_STATUSES,
         'Phase 5 — Internal Market Movements')
@@ -759,67 +733,78 @@ def main():
     discovery['Internal Market Movements'] = {
         'resource': 'internal_market_movements',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': samples,
     }
 
-    # Phase 6: GVMS GMRs
+    # ==========================================================
+    #  PHASE 6: GVMS GMRs
+    # ==========================================================
     by_status, all_refs = probe_resource(
-        api, 'gvms', GVMS_STATUSES, 'Phase 6 — GVMS GMRs')
+        api, 'gvms', GVMS_STATUSES,
+        'Phase 6 — GVMS GMRs')
+    # GVMS read uses different params — skip sample reads for now
     discovery['GVMS GMRs'] = {
         'resource': 'gvms',
         'by_status': {k: v for k, v in by_status.items()},
-        'total': len(all_refs), 'refs': sorted(all_refs),
+        'total': len(all_refs),
+        'refs': sorted(all_refs),
         'sample': [],
     }
 
-    # Phase 7: Permission Grant
+    # ==========================================================
+    #  PHASE 7: Permission Grant
+    # ==========================================================
     con.print()
     con.rule('[bold cyan]Phase 7 — Permission Grant[/bold cyan]')
     con.print()
 
+    # Try to discover the EORI from any declaration we found
     test_eoris = set()
     for key, data in discovery.items():
         for ref, status, rec in data.get('sample', []):
-            for ef in ['importer_eori', 'carrier_eori', 'consignor_eori',
-                       'consignee_eori', 'exporter_eori', 'haulier_eori']:
-                eori = rec.get(ef)
+            for eori_field in ['importer_eori', 'carrier_eori']:
+                eori = rec.get(eori_field)
                 if eori:
                     test_eoris.add(eori)
 
     permissions = []
     if test_eoris:
         con.print(f'  [dim]Testing {len(test_eoris)} discovered EORIs...[/dim]')
-        for eori in sorted(test_eoris)[:10]:
+        for eori in sorted(test_eoris)[:5]:
             http, result, raw, ms = api.check_permission(eori)
             if http == 200 and result:
                 perms = result.get('permissions', [])
-                perm_strs = ', '.join(
-                    f'{p.get("permission_type","?")}='
-                    f'{"granted" if p.get("granted") else "denied"}'
-                    for p in perms)
                 con.print(
                     f'  [cyan]{eori}[/cyan]  '
-                    f'[green]{len(perms)} permission(s)[/green]  '
-                    f'[dim]{perm_strs}[/dim]  {ms}ms')
-                permissions.append({'eori': eori, 'permissions': perms})
+                    f'[green]{len(perms)} permission(s)[/green]  {ms}ms')
+                permissions.append({
+                    'eori': eori, 'permissions': perms})
             else:
-                con.print(f'  [dim]{eori}  HTTP {http}  {ms}ms[/dim]')
+                con.print(
+                    f'  [dim]{eori}  HTTP {http}  {ms}ms[/dim]')
     else:
-        con.print(f'  [yellow]No EORIs discovered — skipping[/yellow]')
+        con.print(f'  [yellow]No EORIs discovered from samples — '
+                  f'skipping permission check[/yellow]')
 
     discovery['Permission Grants'] = {
         'resource': 'permission_grant',
-        'by_status': {}, 'total': len(permissions),
-        'refs': [], 'sample': [],
+        'by_status': {},
+        'total': len(permissions),
+        'refs': [],
+        'sample': [],
         'permissions': permissions,
     }
 
-    # Phase 8: Cross-Reference
+    # ==========================================================
+    #  PHASE 8: Cross-Reference Summary
+    # ==========================================================
     con.print()
     con.rule('[bold cyan]Phase 8 — Cross-Reference[/bold cyan]')
     con.print()
 
+    # Count unique EORIs across all samples
     all_eoris = set()
     for key, data in discovery.items():
         for ref, status, rec in data.get('sample', []):
@@ -831,44 +816,50 @@ def main():
     for eori in sorted(all_eoris):
         con.print(f'    [dim]{eori}[/dim]')
 
-    con.print()
-    for key, data in discovery.items():
-        if data['total'] > 0:
-            con.print(
-                f'  {key:<35}  [green]{data["total"]:>5} refs[/green]')
-
-    # Phase 9: Output
+    # ==========================================================
+    #  PHASE 9: Output + Summary
+    # ==========================================================
     elapsed = time.time() - t0
 
     summary = {
-        'product': __product__, 'module': __module__,
+        'product': __product__,
+        'module': __module__,
         'version': __version__,
         'generated': datetime.now(timezone.utc).isoformat(),
-        'client': CLIENT_CODE, 'client_name': CLIENT_NAME,
-        'env': ENV_CODE, 'api_base': api_base,
-        'api_calls': api.total_calls, 'elapsed': elapsed,
+        'client': CLIENT_CODE,
+        'client_name': CLIENT_NAME,
+        'env': ENV_CODE,
+        'api_base': api_base,
+        'api_calls': api.total_calls,
+        'elapsed': elapsed,
         'errors': api.errors,
-        'totals': {k: v['total'] for k, v in discovery.items()},
+        'totals': {
+            k: v['total'] for k, v in discovery.items()
+        },
         'eoris': sorted(all_eoris),
     }
 
+    # ── JSON ──────────────────────────────────────────────────
     con.print()
     con.rule('[bold cyan]Output Files[/bold cyan]')
     con.print()
 
+    # Serialise (strip raw result dicts from samples for JSON)
     json_discovery = {}
     for key, data in discovery.items():
         json_discovery[key] = {
             'resource': data['resource'],
             'by_status': {
-                s: len(refs) for s, refs in data.get('by_status', {}).items()},
+                s: len(refs) for s, refs in data.get('by_status', {}).items()
+            },
             'total': data['total'],
             'refs': data.get('refs', []),
             'sample': [
                 {'reference': ref, 'status': status,
                  'fields': {k: str(v)[:200] for k, v in rec.items()
                             if v and not k.startswith('_')}}
-                for ref, status, rec in data.get('sample', [])],
+                for ref, status, rec in data.get('sample', [])
+            ],
         }
         if 'permissions' in data:
             json_discovery[key]['permissions'] = data['permissions']
@@ -878,18 +869,19 @@ def main():
         json.dump(json_out, f, indent=2, default=str, ensure_ascii=False)
     con.print(f'  JSON:  [green]{JSON_FILE}[/green]')
 
+    # ── HTML ──────────────────────────────────────────────────
     html_path = write_html(discovery, summary)
     con.print(f'  HTML:  [green]{html_path}[/green]')
 
-    # Summary Table
+    # ── Summary Table ─────────────────────────────────────────
     con.print()
     con.rule('[bold yellow]Probe Complete[/bold yellow]')
     con.print()
 
     tbl = Table(
         box=box.ROUNDED,
-        title=(f'[bold]{CLIENT_NAME} ({CLIENT_CODE}) — '
-               f'{ENV_CODE} Test Environment Probe[/bold]'),
+        title=f'[bold]{CLIENT_NAME} ({CLIENT_CODE}) — '
+              f'{ENV_CODE} Test Environment Probe[/bold]',
         border_style='green')
     tbl.add_column('Resource', style='cyan', min_width=38)
     tbl.add_column('Refs Found', justify='right', style='green')
@@ -918,31 +910,25 @@ def main():
 
     con.print(tbl)
 
-    # Verdict
+    # ── Verdict ───────────────────────────────────────────────
     con.print()
     total_all = sum(d['total'] for d in discovery.values())
     if total_all > 0:
-        rc = sum(1 for d in discovery.values() if d['total'] > 0)
         con.print(
             f'  [bold green]Data found![/bold green]  '
             f'{total_all} total declaration references across '
-            f'{rc} resource types.')
-        con.print(f'  [dim]Next steps:[/dim]')
-        con.print(f'  [dim]  1. Create BKD schema tables '
-                  f'(TSS_Deploy_MultiCustomer_Schema.sql)[/dim]')
-        con.print(f'  [dim]  2. Run populate script to download '
-                  f'full declaration data[/dim]')
-        con.print(f'  [dim]  3. Or create new test declarations '
-                  f'via Job upload scripts[/dim]')
+            f'{sum(1 for d in discovery.values() if d["total"] > 0)} '
+            f'resource types.')
+        con.print(
+            f'  [dim]Next: populate BRK schema tables from discovered refs, '
+            f'or create new test declarations.[/dim]')
     else:
         con.print(
             f'  [bold yellow]Clean slate.[/bold yellow]  '
             f'No existing declarations found for {CLIENT_CODE}/{ENV_CODE}.')
-        con.print(f'  [dim]This account is ready for fresh test data.[/dim]')
-        con.print(f'  [dim]Use the Job upload scripts to create '
-                  f'declarations:[/dim]')
-        con.print(f'  [dim]  python Job_Upload_ENS_Header.py '
-                  f'--interactive[/dim]')
+        con.print(
+            f'  [dim]This account is ready for fresh test data. '
+            f'Use the Job upload scripts to create declarations.[/dim]')
 
     con.print()
     con.print(

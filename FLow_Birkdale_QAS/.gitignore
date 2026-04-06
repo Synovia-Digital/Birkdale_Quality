@@ -418,10 +418,11 @@ FodyWeavers.xsd
 *.msp
 <<<<<<< HEAD
 
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+
 Git_Local_OLD_*/
 Birkdale_Quality_OLD_*/
-.vs/
-*.pyc
-__pycache__/
-=======
->>>>>>> 026b5bbb0b2824607b65f1dea92c6858e8079e6a
