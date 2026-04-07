@@ -1,0 +1,106 @@
+name: Deploy Render
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - FLow_Birkdale_QAS/Render/**
+      - render.yaml
+      - .github/workflows/deploy-render.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - FLow_Birkdale_QAS/Render/**
+      - render.yaml
+      - .github/workflows/deploy-render.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: render-bkd-qas-dashboard
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: FLow_Birkdale_QAS/Render/requirements.txt
+
+      - name: Install system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unixodbc unixodbc-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r FLow_Birkdale_QAS/Render/requirements.txt
+
+      - name: Compile the Streamlit app
+        run: python -m compileall FLow_Birkdale_QAS/Render/app.py
+
+      - name: Detect automated tests
+        id: detect-tests
+        run: |
+          if find FLow_Birkdale_QAS -type f \( -path "*/tests/*.py" -o -name "test_*.py" -o -name "*_test.py" \) | grep -q .; then
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install pytest
+        if: steps.detect-tests.outputs.has_tests == 'true'
+        run: pip install pytest
+
+      - name: Run automated tests
+        if: steps.detect-tests.outputs.has_tests == 'true'
+        run: pytest
+
+      - name: Skip tests
+        if: steps.detect-tests.outputs.has_tests != 'true'
+        run: echo "No pytest-style automated tests were detected."
+
+      - name: Build the Render image
+        run: docker build --file FLow_Birkdale_QAS/Render/Dockerfile --tag bkd-qas-dashboard:${{ github.sha }} ./FLow_Birkdale_QAS/Render
+
+  deploy:
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$RENDER_DEPLOY_HOOK_URL" ]; then
+            echo "::error::Missing GitHub secret RENDER_DEPLOY_HOOK_URL."
+            exit 1
+          fi
+
+          separator="?"
+          if [[ "$RENDER_DEPLOY_HOOK_URL" == *\?* ]]; then
+            separator="&"
+          fi
+
+          curl --fail --show-error --silent --request POST \
+            "${RENDER_DEPLOY_HOOK_URL}${separator}ref=${GITHUB_SHA}"

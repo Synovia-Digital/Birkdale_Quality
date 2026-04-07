@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: bkd-qas-dashboard
+    runtime: docker
+    plan: starter
+    branch: main
+    autoDeployTrigger: off
+    dockerfilePath: ./FLow_Birkdale_QAS/Render/Dockerfile
+    dockerContext: ./FLow_Birkdale_QAS/Render
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: DB_SERVER
+        sync: false
+      - key: DB_NAME
+        value: Fusion_TSS
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_DRIVER
+        value: "{ODBC Driver 17 for SQL Server}"

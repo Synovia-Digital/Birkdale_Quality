@@ -12,14 +12,17 @@ RUN apt-get update && \
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-EXPOSE 8501
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+ENV PORT=10000
 
-ENTRYPOINT ["streamlit", "run", "app.py", \
-    "--server.port=8501", \
-    "--server.address=0.0.0.0", \
-    "--server.headless=true", \
-    "--browser.gatherUsageStats=false"]
+EXPOSE 10000
+HEALTHCHECK CMD curl --fail http://localhost:${PORT}/_stcore/health || exit 1
+
+CMD streamlit run app.py \
+    --server.port=${PORT} \
+    --server.address=0.0.0.0 \
+    --server.headless=true \
+    --browser.gatherUsageStats=false
