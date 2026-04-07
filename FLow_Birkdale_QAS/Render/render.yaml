@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: bkd-qas-dashboard
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    envVars:
+      - key: DB_SERVER
+        sync: false
+      - key: DB_NAME
+        value: Fusion_TSS
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_DRIVER
+        value: "{ODBC Driver 17 for SQL Server}"
+    healthCheckPath: /_stcore/health

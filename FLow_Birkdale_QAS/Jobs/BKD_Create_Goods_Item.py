@@ -1,0 +1,252 @@
+"""
+================================================================================
+  Synovia Flow -- BKD Create Goods Item
+  Licensed Component: Synovia Digital Ltd
+================================================================================
+
+  Version:  1.0.0
+  Schema:   BKD (Birkdale)
+  API:      TSS Declaration API v2.9.4
+
+  Reads PENDING Goods Items from BKD.StagingGoodsItems where the
+  parent Consignment is CREATED, submits to the TSS /goods endpoint,
+  updates status, logs everything to BKD.ApiLog and JSON.
+
+  Usage:
+    python BKD_Create_Goods_Item.py              # normal run
+    python BKD_Create_Goods_Item.py --dry-run    # validate without submitting
+
+  Copyright (c) 2026 Synovia Digital Ltd. All rights reserved.
+================================================================================
+"""
+
+import os, sys, time
+from datetime import datetime, timezone
+
+from BKD_Shared import (
+    con, CLIENT_CODE, CLIENT_NAME, ENV_CODE, S, OUTPUT_DIR, DRY_RUN,
+    ACT_AS_EORI, ACT_AS_CUSTOMER,
+    query, execute, sget, load_credentials, TssApi,
+    log_api_call, JsonLogger,
+    is_retryable, sc, make_run_id, print_banner, print_creds,
+    print_summary_table, print_run_footer,
+)
+
+SCRIPT_NAME = 'BKD Create Goods Item'
+DECL_TYPE   = 'GOODS_ITEM'
+ENDPOINT    = 'goods'
+STAGING_TBL = f'{S}.StagingGoodsItems'
+
+
+def propagate_dec_refs():
+    """Push DEC references down from CREATED consignments to child goods items."""
+    n = execute(f"""
+        UPDATE g
+        SET g.dec_reference = c.dec_reference
+        FROM {S}.StagingGoodsItems g
+        JOIN {S}.StagingConsignments c ON c.staging_id = g.staging_cons_id
+        WHERE c.status = 'CREATED'
+          AND c.dec_reference IS NOT NULL
+          AND g.dec_reference IS NULL
+    """)
+    if n:
+        con.print(f'  Propagated DEC refs to [bold]{n}[/bold] goods item(s)')
+    return n
+
+
+def load_pending():
+    """Load PENDING, FAILED, or INVALID Goods Items whose parent consignment is CREATED."""
+    return query(f"""
+        SELECT g.*, c.dec_reference AS parent_dec_ref
+        FROM {S}.StagingGoodsItems g
+        JOIN {S}.StagingConsignments c ON c.staging_id = g.staging_cons_id
+        WHERE g.status IN ('PENDING', 'FAILED', 'INVALID')
+          AND g.retry_count < g.max_retries
+          AND c.status = 'CREATED'
+          AND c.dec_reference IS NOT NULL
+        ORDER BY g.staging_id
+    """)
+
+
+def build_payload(row):
+    """Build the API request payload from a staging row."""
+    # Format mass/amount values to max 2 decimal places
+    def fmt2(val):
+        """Format a numeric value to max 2 decimal places as string."""
+        if val is None or val == '':
+            return ''
+        try:
+            return f'{float(val):.2f}'
+        except (ValueError, TypeError):
+            return str(val)
+
+    payload = {
+        'op_type':                 'create',
+        'consignment_number':      row['parent_dec_ref'],
+        'goods_id':                '',
+        'goods_description':       row['goods_description'],
+        'type_of_packages':        row['type_of_packages'],
+        'number_of_packages':      str(row['number_of_packages']),
+        'package_marks':           sget(row, 'package_marks', 'ADDR'),
+        'gross_mass_kg':           fmt2(row['gross_mass_kg']),
+        'net_mass_kg':             fmt2(sget(row, 'net_mass_kg')),
+        'controlled_goods':        sget(row, 'controlled_goods', 'no'),
+    }
+    # Conditionally add optional fields -- only include when populated
+    optional = {
+        'equipment_number':        sget(row, 'equipment_number'),
+        'un_dangerous_goods_code': sget(row, 'un_dangerous_goods_code'),
+        'commodity_code':          str(row['commodity_code']) if row.get('commodity_code') else '',
+        'country_of_origin':       sget(row, 'country_of_origin'),
+        'item_invoice_amount':     fmt2(row.get('item_invoice_amount')) if row.get('item_invoice_amount') else '',
+        'item_invoice_currency':   sget(row, 'item_invoice_currency'),
+        'procedure_code':          sget(row, 'procedure_code'),
+        'controlled_goods_type':   sget(row, 'controlled_goods_type'),
+    }
+    for k, v in optional.items():
+        if v:
+            payload[k] = v
+    return payload
+
+
+def submit(api, run_id, jlog):
+    """Submit all pending Goods Items. Returns (created, failed, errors)."""
+    rows = load_pending()
+    if not rows:
+        con.print('  [dim]No PENDING Goods Items (or parent Consignment not CREATED)[/dim]')
+        return 0, 0, []
+
+    con.print(f'  Found [bold]{len(rows)}[/bold] Goods Item(s) to submit\n')
+    created = failed = 0
+    errors = []
+
+    for i, row in enumerate(rows, 1):
+        sid = row['staging_id']
+        dec_ref = row['parent_dec_ref']
+        payload = build_payload(row)
+        desc = (row['goods_description'] or '')[:30]
+
+        # Console preview
+        con.print(
+            f'  {i:>3}/{len(rows)}  [dim]#{sid}[/dim]  '
+            f'<- [cyan]{dec_ref}[/cyan]  '
+            f'{desc}  {row["number_of_packages"]} {row["type_of_packages"]}'
+        )
+
+        # Mark as SUBMITTED
+        execute(f"""
+            UPDATE {STAGING_TBL}
+            SET status = 'SUBMITTED',
+                submitted_at = SYSUTCDATETIME(),
+                last_attempted_at = SYSUTCDATETIME(),
+                retry_count = retry_count + 1
+            WHERE staging_id = ?
+        """, [sid])
+
+        if DRY_RUN:
+            con.print('       [dim]DRY RUN -- payload validated, not sent[/dim]')
+            execute(f"UPDATE {STAGING_TBL} SET status='PENDING', retry_count=retry_count-1 WHERE staging_id=?", [sid])
+            jlog.log_call(DECL_TYPE, 'DRY_RUN', dec_ref, ENDPOINT, 'POST', payload, 0, {}, '', 0, 'dry_run', f'#{sid}')
+            con.print()
+            continue
+
+        # ── API call ──
+        http, result, raw, ms = api.post(ENDPOINT, payload)
+        ref = result.get('reference', '')
+        msg = result.get('process_message', '')
+        api_status = result.get('status', '')
+        url = f'{api.base_url}/{ENDPOINT}'
+
+        # ── Log to BKD.ApiLog ──
+        log_api_call(
+            declaration_type=DECL_TYPE,
+            call_type='CREATE',
+            reference=ref or f'staging:{sid}',
+            http_method='POST',
+            url=url,
+            request_params=payload,
+            http_status=http,
+            response_status=api_status,
+            response_message=msg,
+            response_json=raw,
+            duration_ms=ms,
+            error_detail='' if http == 200 else (raw or '')[:4000],
+            notes=f'staging_id={sid} dec_ref={dec_ref} desc={desc}',
+            act_as=ACT_AS_EORI,
+            act_as_customer=ACT_AS_CUSTOMER,
+        )
+
+        # ── Log to JSON ──
+        jlog.log_call(DECL_TYPE, 'CREATE', ref, ENDPOINT, 'POST', payload,
+                       http, result, raw, ms, api_status, f'#{sid} <- {dec_ref}')
+
+        # ── Update staging ──
+        if http == 200 and api_status == 'created':
+            execute(f"""
+                UPDATE {STAGING_TBL}
+                SET status = 'CREATED',
+                    goods_id = ?,
+                    api_status = ?,
+                    api_message = ?,
+                    http_status = ?,
+                    completed_at = SYSUTCDATETIME()
+                WHERE staging_id = ?
+            """, [ref, api_status, msg[:500], http, sid])
+            con.print(f'       [green]CREATED  {ref[:20]}[/green]  {ms}ms')
+            created += 1
+        else:
+            new_status = 'FAILED' if is_retryable(msg) else 'INVALID'
+            execute(f"""
+                UPDATE {STAGING_TBL}
+                SET status = ?,
+                    api_status = ?,
+                    api_message = ?,
+                    http_status = ?,
+                    error_message = ?
+                WHERE staging_id = ?
+            """, [new_status, api_status, msg[:500], http, (raw or '')[:4000], sid])
+            con.print(f'       [{sc(new_status)}]{new_status}  HTTP {http}  {msg[:60]}[/{sc(new_status)}]')
+            errors.append({
+                'type': DECL_TYPE, 'staging_id': sid, 'http': http, 'message': msg,
+                'dec_ref': dec_ref, 'raw': raw[:2000] if raw else '',
+            })
+            failed += 1
+
+        con.print()
+
+    return created, failed, errors
+
+
+# ──────────────────────────────────────────────────────────────
+def main():
+    t0 = time.time()
+    run_id = make_run_id('GOODS')
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    print_banner(SCRIPT_NAME, run_id)
+    creds = load_credentials()
+    print_creds(creds)
+
+    api = TssApi(creds['base_url'], creds['tss_username'], creds['tss_password'])
+    jlog = JsonLogger(run_id)
+
+    # Propagate DEC refs before submitting
+    con.rule('[bold]Propagate DEC References[/bold]')
+    propagate_dec_refs()
+    con.print()
+
+    con.rule(f'[bold blue]{SCRIPT_NAME}[/bold blue]')
+    con.print()
+
+    ok, fail, errs = submit(api, run_id, jlog)
+
+    elapsed = time.time() - t0
+    con.print()
+    con.rule('[bold yellow]Complete[/bold yellow]')
+    print_summary_table(f'{CLIENT_NAME} -- {run_id}', [(DECL_TYPE, ok, fail)])
+    jlog.write_summary({'created': ok, 'failed': fail, 'errors': errs})
+    print_run_footer(run_id, jlog, errs, elapsed)
+
+
+if __name__ == '__main__':
+    main()
