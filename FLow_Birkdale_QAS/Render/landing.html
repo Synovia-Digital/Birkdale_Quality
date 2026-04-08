@@ -1,0 +1,223 @@
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, .stApp, [data-testid="stAppViewContainer"] {
+  background: #0d0d0f !important;
+  color: #e8e8ec !important;
+  min-height: 100vh;
+}
+
+[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+  display: none !important;
+}
+
+.block-container {
+  max-width: 1180px !important;
+  padding-top: 1.25rem !important;
+  padding-bottom: 1.5rem !important;
+}
+
+.landing-stage {
+  position: relative;
+  min-height: calc(100vh - 2.75rem);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 0;
+}
+
+.landing-stage::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(42,42,50,0.7) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42,42,50,0.7) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.32;
+  pointer-events: none;
+}
+
+.landing-stage::after {
+  content: "";
+  position: fixed;
+  top: -180px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 760px;
+  height: 520px;
+  background: radial-gradient(ellipse, rgba(155,21,83,0.18) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.landing-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 680px;
+  padding: 3.5rem 3.25rem 3rem;
+  border-radius: 24px;
+  text-align: center;
+  background: linear-gradient(180deg, rgba(22,22,26,0.96), rgba(12,12,16,0.98));
+  border: 1px solid rgba(155,21,83,0.18);
+  box-shadow: 0 24px 90px rgba(0,0,0,0.55), 0 0 0 1px rgba(155,21,83,0.06);
+}
+
+.landing-logo {
+  display: block;
+  margin: 0 auto 2.2rem;
+  height: 48px;
+  width: auto;
+}
+
+.landing-badge {
+  display: inline-block;
+  margin-bottom: 1.35rem;
+  padding: 0.32rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid rgba(155,21,83,0.35);
+  background: rgba(155,21,83,0.15);
+  color: #d46298;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.landing-title {
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -0.015em;
+  margin-bottom: 1rem;
+  color: #f6f6f9;
+}
+
+.landing-title span { color: #d46298; }
+
+.landing-lead {
+  color: #a8a8b6;
+  font-size: 0.98rem;
+  line-height: 1.75;
+  margin: 0 auto 2.2rem;
+  max-width: 560px;
+}
+
+.landing-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  justify-content: center;
+  margin-bottom: 2.25rem;
+}
+
+.landing-feature {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.38rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid #2a2a32;
+  background: rgba(255,255,255,0.04);
+  color: #babac7;
+  font-size: 0.8rem;
+}
+
+.landing-feature::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9b1553;
+  flex-shrink: 0;
+}
+
+.landing-actions {
+  display: flex;
+  justify-content: center;
+}
+
+.landing-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-width: 220px;
+  padding: 0.95rem 2rem;
+  border-radius: 14px;
+  background: #9b1553;
+  color: #ffffff !important;
+  text-decoration: none !important;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 30px rgba(155,21,83,0.4);
+}
+
+.landing-cta:hover {
+  background: #7a1040;
+}
+
+.landing-note {
+  margin-top: 1.75rem;
+  color: #626274;
+  font-size: 0.76rem;
+}
+
+@media (max-width: 768px) {
+  .block-container {
+    padding-top: 0.75rem !important;
+  }
+
+  .landing-card {
+    padding: 2.75rem 1.4rem 2.4rem;
+    border-radius: 18px;
+  }
+
+  .landing-title {
+    font-size: 1.55rem;
+  }
+
+  .landing-lead {
+    font-size: 0.94rem;
+  }
+
+  .landing-cta {
+    width: 100%;
+  }
+}
+</style>
+
+<section class="landing-stage">
+  <div class="landing-card">
+    <svg class="landing-logo" viewBox="0 0 320 48" xmlns="http://www.w3.org/2000/svg" aria-label="Birkdale">
+      <text x="0" y="40" font-size="44" font-family="'Segoe UI', system-ui, sans-serif"
+            font-weight="800" letter-spacing="6" fill="#9B1553">BIRKDALE</text>
+    </svg>
+
+    <div class="landing-badge">Quality Assurance System</div>
+
+    <h1 class="landing-title">TSS Declaration<br><span>Management Platform</span></h1>
+
+    <p class="landing-lead">
+      End-to-end pipeline for managing UK customs declarations through the
+      Trader Support Service API, from discovery and staging through validation
+      and submission, with a full audit trail and real-time status monitoring.
+    </p>
+
+    <div class="landing-features">
+      <span class="landing-feature">Declaration Chain View</span>
+      <span class="landing-feature">Submission Queue</span>
+      <span class="landing-feature">ENS and Consignment Forms</span>
+      <span class="landing-feature">CSV Bulk Upload</span>
+      <span class="landing-feature">TSS API Sync</span>
+      <span class="landing-feature">Live KPI Dashboard</span>
+    </div>
+
+    <div class="landing-actions">
+      <a class="landing-cta" href="?view=dashboard">Open Dashboard</a>
+    </div>
+
+    <p class="landing-note">Powered by Synovia Flow | Birkdale Internal Tools</p>
+  </div>
+</section>
