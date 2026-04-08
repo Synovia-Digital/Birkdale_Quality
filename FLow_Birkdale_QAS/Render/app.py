@@ -9,6 +9,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+from dotenv import load_dotenv
 
 # ── Page config MUST be the first Streamlit command ───────────
 st.set_page_config(
@@ -21,6 +22,7 @@ st.set_page_config(
 LANDING_HTML_PATH = Path(__file__).with_name("index.html")
 LANDING_LOGO_PATH = Path(__file__).with_name("birkdalelogo.png")
 
+load_dotenv(Path(__file__).with_name(".env"))
 
 def get_view():
     view = st.query_params.get("view", "landing")
