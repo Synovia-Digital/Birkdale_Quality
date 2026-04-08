@@ -10,6 +10,14 @@ import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# ── Page config MUST be the first Streamlit command ───────────
+st.set_page_config(
+    page_title="BKD Pipeline Operations",
+    page_icon="🚢",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
 LANDING_HTML_PATH = Path(__file__).with_name("index.html")
 LANDING_LOGO_PATH = Path(__file__).with_name("birkdalelogo.png")
 
@@ -48,18 +56,7 @@ def build_landing_logo_markup():
 
 
 def prepare_landing_document(html_doc):
-    html_doc = html_doc.replace("__BIRKDALE_LOGO_BLOCK__", build_landing_logo_markup())
-    html_doc = re.sub(
-        r'href="https://bkd-qas-dashboard\.onrender\.com"(?:\s+target="[^"]*")?(?:\s+rel="[^"]*")?',
-        'href="?view=dashboard" target="_top"',
-        html_doc,
-    )
-    html_doc = re.sub(
-        r'href="\?view=dashboard"(?:\s+target="[^"]*")?(?:\s+rel="[^"]*")?',
-        'href="?view=dashboard" target="_top"',
-        html_doc,
-    )
-    return html_doc
+    return html_doc.replace("__BIRKDALE_LOGO_BLOCK__", build_landing_logo_markup())
 
 
 def render_landing_page():
@@ -102,26 +99,70 @@ def render_landing_page():
     st.markdown(
         """
 <style>
-[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] { display: none !important; }
-.block-container { max-width: 100% !important; padding: 0 !important; }
+[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
+    display: none !important;
+}
+.block-container {
+    max-width: 100% !important;
+    padding: 0 !important;
+}
+div[data-testid="stButton"] {
+    display: flex;
+    justify-content: center;
+    margin-top: -235px;
+    margin-left: auto;
+    margin-right: auto;
+    position: relative;
+    z-index: 9999;
+}
+div[data-testid="stButton"] > button {
+    background: #9B1553 !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 12px !important;
+    padding: 0.95rem 2.2rem !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    min-width: 240px !important;
+    box-shadow: 0 4px 20px rgba(155,21,83,0.45) !important;
+}
+
+div[data-testid="stButton"] > button:hover {
+    background: #7a1040 !important;
+}
 </style>
 """,
         unsafe_allow_html=True,
     )
 
     html_doc = load_landing_document()
-    if html_doc:
-        components.html(prepare_landing_document(html_doc), height=920, scrolling=False)
-        return
+    rendered_html = (
+        prepare_landing_document(html_doc)
+        if html_doc
+        else prepare_landing_document(fallback_html)
+    )
 
-    components.html(prepare_landing_document(fallback_html), height=920, scrolling=False)
+    components.html(rendered_html, height=920, scrolling=False)
 
-st.set_page_config(page_title="BKD Pipeline Operations", page_icon="🚢", layout="wide", initial_sidebar_state="collapsed")
+    # ── Streamlit button overlaid on the landing page ─────────
+    left, center, right = st.columns([1, 1.2, 1])
+    with center:
+        clicked = st.button(
+            "Open Dashboard", key="open_dashboard_btn", use_container_width=True
+        )
+    if clicked:
+        st.query_params["view"] = "dashboard"
+        st.rerun()
 
-# ── Clean readable colour scheme ──────────────────────────────
+
+# ── Route: landing vs dashboard ───────────────────────────────
 if get_view() != "dashboard":
     render_landing_page()
     st.stop()
+
+# ══════════════════════════════════════════════════════════════
+#  EVERYTHING BELOW IS DASHBOARD — UNCHANGED
+# ══════════════════════════════════════════════════════════════
 
 st.markdown("""<style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
