@@ -3,12 +3,15 @@ Synovia Flow -- BKD Pipeline Operations Dashboard v5
 Clean readable theme, CSV upload, Create Declaration forms.
 """
 import os, configparser, pyodbc, base64, io
+import re
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 
-LANDING_HTML_PATH = Path(__file__).with_name("landing.html")
+LANDING_HTML_PATH = Path(__file__).with_name("index.html")
+LANDING_LOGO_PATH = Path(__file__).with_name("birkdalelogo.png")
 
 
 def get_view():
@@ -18,86 +21,70 @@ def get_view():
     return str(view).strip().lower() or "landing"
 
 
+def read_text_file(path):
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="cp1252")
+
+
+def load_landing_document():
+    if LANDING_HTML_PATH.exists():
+        return read_text_file(LANDING_HTML_PATH)
+    return None
+
+
+def build_landing_logo_markup():
+    if LANDING_LOGO_PATH.exists():
+        logo_b64 = base64.b64encode(LANDING_LOGO_PATH.read_bytes()).decode("ascii")
+        return f'<img class="logo" src="data:image/png;base64,{logo_b64}" alt="Birkdale" />'
+
+    return """
+<svg class="logo" viewBox="0 0 320 48" xmlns="http://www.w3.org/2000/svg" aria-label="Birkdale">
+  <text x="0" y="40" font-size="44" font-family="'Segoe UI', system-ui, sans-serif"
+        font-weight="800" letter-spacing="6" fill="#9B1553">BIRKDALE</text>
+</svg>
+"""
+
+
+def prepare_landing_document(html_doc):
+    html_doc = html_doc.replace("__BIRKDALE_LOGO_BLOCK__", build_landing_logo_markup())
+    html_doc = re.sub(
+        r'href="https://bkd-qas-dashboard\.onrender\.com"(?:\s+target="[^"]*")?(?:\s+rel="[^"]*")?',
+        'href="?view=dashboard" target="_top"',
+        html_doc,
+    )
+    html_doc = re.sub(
+        r'href="\?view=dashboard"(?:\s+target="[^"]*")?(?:\s+rel="[^"]*")?',
+        'href="?view=dashboard" target="_top"',
+        html_doc,
+    )
+    return html_doc
+
+
 def render_landing_page():
     fallback_html = """
-<style>
-html, body, .stApp, [data-testid="stAppViewContainer"] {
-    background: #0d0d0f !important;
-    color: #e8e8ec !important;
-}
-[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] {
-    display: none !important;
-}
-.block-container {
-    max-width: 980px !important;
-    padding-top: 2rem !important;
-    padding-bottom: 2rem !important;
-}
-.landing-shell {
-    min-height: calc(100vh - 4rem);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.landing-card {
-    width: 100%;
-    max-width: 680px;
-    border-radius: 24px;
-    padding: 3.5rem 3rem;
-    background: linear-gradient(180deg, rgba(22,22,26,0.96), rgba(14,14,18,0.98));
-    border: 1px solid rgba(155,21,83,0.22);
-    box-shadow: 0 20px 80px rgba(0,0,0,0.45);
-    text-align: center;
-}
-.landing-badge {
-    display: inline-block;
-    margin-bottom: 1.2rem;
-    padding: 0.35rem 0.85rem;
-    border-radius: 999px;
-    border: 1px solid rgba(155,21,83,0.35);
-    color: #d35f96;
-    background: rgba(155,21,83,0.12);
-    font-size: 0.74rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-.landing-title {
-    margin: 0 0 0.9rem 0;
-    color: #f5f5f7;
-    font-size: 2.3rem;
-    line-height: 1.1;
-}
-.landing-title span {
-    color: #d35f96;
-}
-.landing-copy {
-    margin: 0 auto 2rem auto;
-    max-width: 560px;
-    color: #b6b6c3;
-    font-size: 1rem;
-    line-height: 1.75;
-}
-.landing-actions {
-    display: flex;
-    justify-content: center;
-}
-.landing-cta {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 220px;
-    padding: 0.95rem 1.6rem;
-    border-radius: 14px;
-    background: #9b1553;
-    color: #ffffff !important;
-    text-decoration: none !important;
-    font-weight: 700;
-    box-shadow: 0 10px 30px rgba(155,21,83,0.35);
-}
-</style>
-<div class="landing-shell">
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Birkdale QAS</title>
+  <style>
+    body { margin: 0; min-height: 100vh; background: #0d0d0f; display: flex; align-items: center; justify-content: center; padding: 2rem; color: #e8e8ec; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+    .landing-card { width: 100%; max-width: 680px; border-radius: 24px; padding: 3.5rem 3rem; background: linear-gradient(180deg, rgba(22,22,26,0.96), rgba(14,14,18,0.98)); border: 1px solid rgba(155,21,83,0.22); text-align: center; }
+    .landing-badge { display: inline-block; margin-bottom: 1.2rem; padding: 0.35rem 0.85rem; border-radius: 999px; border: 1px solid rgba(155,21,83,0.35); color: #d35f96; background: rgba(155,21,83,0.12); font-size: 0.74rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    .logo { display: block; margin: 0 auto 2rem; width: min(100%, 520px); height: auto; }
+    .landing-title { margin: 0 0 0.9rem 0; color: #f5f5f7; font-size: 2.3rem; line-height: 1.1; }
+    .landing-title span { color: #d35f96; }
+    .landing-copy { margin: 0 auto 2rem auto; max-width: 560px; color: #b6b6c3; font-size: 1rem; line-height: 1.75; }
+    .landing-actions { display: flex; justify-content: center; }
+    .landing-cta { display: inline-flex; align-items: center; justify-content: center; min-width: 220px; padding: 0.95rem 1.6rem; border-radius: 14px; background: #9b1553; color: #ffffff; text-decoration: none; font-weight: 700; }
+  </style>
+</head>
+<body>
   <div class="landing-card">
+    __BIRKDALE_LOGO_BLOCK__
     <div class="landing-badge">Quality Assurance System</div>
     <h1 class="landing-title">Birkdale <span>TSS Platform</span></h1>
     <p class="landing-copy">
@@ -105,20 +92,29 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
       from staging and validation to monitoring and submission.
     </p>
     <div class="landing-actions">
-      <a class="landing-cta" href="?view=dashboard">Open Dashboard</a>
+      <a class="landing-cta" href="?view=dashboard" target="_top">Open Dashboard</a>
     </div>
   </div>
-</div>
+</body>
+</html>
 """
 
-    try:
-        landing_html = LANDING_HTML_PATH.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        landing_html = LANDING_HTML_PATH.read_text(encoding="cp1252")
-    except FileNotFoundError:
-        landing_html = fallback_html
+    st.markdown(
+        """
+<style>
+[data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"] { display: none !important; }
+.block-container { max-width: 100% !important; padding: 0 !important; }
+</style>
+""",
+        unsafe_allow_html=True,
+    )
 
-    st.markdown(landing_html, unsafe_allow_html=True)
+    html_doc = load_landing_document()
+    if html_doc:
+        components.html(prepare_landing_document(html_doc), height=920, scrolling=False)
+        return
+
+    components.html(prepare_landing_document(fallback_html), height=920, scrolling=False)
 
 st.set_page_config(page_title="BKD Pipeline Operations", page_icon="🚢", layout="wide", initial_sidebar_state="collapsed")
 
